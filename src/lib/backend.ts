@@ -196,7 +196,10 @@ class SupabaseBackend implements Backend {
         .select('id, workspace_id, title, lat, lng, category, marker_icon, visited, date_visited, source_type, created_at, updated_at')
         .eq('workspace_id', workspaceId)
         .order('updated_at', { ascending: false }),
-      this.client.from('entries').select('place_id, comment, rating, tags, photo_paths'),
+      this.client
+        .from('entries')
+        .select('place_id, comment, rating, tags, photo_paths, places!inner(workspace_id)')
+        .eq('places.workspace_id', workspaceId),
     ])
 
     if (placeError) {
@@ -260,12 +263,19 @@ class SupabaseBackend implements Backend {
       throw new Error(`Place saved, but notes failed to update: ${entryError?.message ?? 'Unknown error'}`)
     }
 
+    const savedPhotoUrls = savedEntry.photo_paths ?? []
+    if (input.photoUrls.length !== savedPhotoUrls.length) {
+      throw new Error(
+        `Place saved, but Supabase did not return the expected photo list. Expected ${input.photoUrls.length}, got ${savedPhotoUrls.length}.`,
+      )
+    }
+
     return {
       ...mapPlaceRow(savedPlace),
       comment: savedEntry.comment ?? '',
       rating: savedEntry.rating ?? 0,
       tags: savedEntry.tags ?? [],
-      photoUrls: savedEntry.photo_paths ?? [],
+      photoUrls: savedPhotoUrls,
     }
   }
 

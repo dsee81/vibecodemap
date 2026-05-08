@@ -159,6 +159,14 @@ function formatDate(date: string | null) {
   })
 }
 
+function toErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return 'Something went wrong.'
+}
+
 function App() {
   const mapHostRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -551,10 +559,31 @@ function App() {
 
     try {
       const sourceType: PlaceSourceType = selectedPlace.sourceType
-      const uploadedPhotoUrls = pendingPhotos.length
-        ? await Promise.all(pendingPhotos.map((photo) => backend.uploadPhoto(workspaceContext.workspace.id, photo.file)))
-        : []
+      let uploadedPhotoUrls: string[] = []
+
+      if (pendingPhotos.length) {
+        setNotice({
+          tone: 'neutral',
+          message: `Uploading ${pendingPhotos.length} photo${pendingPhotos.length === 1 ? '' : 's'}...`,
+        })
+
+        try {
+          uploadedPhotoUrls = await Promise.all(
+            pendingPhotos.map((photo) => backend.uploadPhoto(workspaceContext.workspace.id, photo.file)),
+          )
+        } catch (error) {
+          throw new Error(
+            `Photo upload did not complete. Check the Supabase Storage bucket and upload policy. ${toErrorMessage(error)}`,
+          )
+        }
+      }
+
       const photoUrls = [...formState.photoUrls, ...uploadedPhotoUrls]
+      setNotice({
+        tone: 'neutral',
+        message: uploadedPhotoUrls.length ? 'Saving place with uploaded photos...' : 'Saving place...',
+      })
+
       const saved = await backend.savePlace({
         workspaceId: workspaceContext.workspace.id,
         placeId: isExistingPlace(selectedPlace) ? selectedPlace.id : undefined,
@@ -572,20 +601,16 @@ function App() {
         photoUrls,
       })
 
-      setPlaces((current) => {
-        const exists = current.some((place) => place.id === saved.id)
-        const next = exists
-          ? current.map((place) => (place.id === saved.id ? saved : place))
-          : [saved, ...current]
+      const refreshedPlaces = await backend.listPlaces(workspaceContext.workspace.id)
+      const refreshedSaved = refreshedPlaces.find((place) => place.id === saved.id) ?? saved
 
-        return next.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      })
-      setSelectedPlace(saved)
-      setFormState(toFormState(saved))
+      setPlaces(refreshedPlaces)
+      setSelectedPlace(refreshedSaved)
+      setFormState(toFormState(refreshedSaved))
       clearPendingPhotos()
       setNotice({
         tone: 'success',
-        message: `Saved ${saved.title}${
+        message: `Saved ${refreshedSaved.title}${
           uploadedPhotoUrls.length
             ? ` with ${uploadedPhotoUrls.length} photo${uploadedPhotoUrls.length === 1 ? '' : 's'}`
             : ''
