@@ -183,6 +183,20 @@ grant select, insert, update on public.workspace_members to authenticated;
 grant select, insert, update, delete on public.places to authenticated;
 grant select, insert, update, delete on public.entries to authenticated;
 
--- Create a public bucket named `place-photos`, then add storage policies in Supabase:
--- 1. Public read for files in bucket `place-photos`
--- 2. Insert for authenticated users when bucket_id = 'place-photos'
+insert into storage.buckets (id, name, public)
+values ('place-photos', 'place-photos', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists place_photos_public_read on storage.objects;
+create policy place_photos_public_read
+on storage.objects
+for select
+to public
+using (bucket_id = 'place-photos');
+
+drop policy if exists place_photos_authenticated_insert on storage.objects;
+create policy place_photos_authenticated_insert
+on storage.objects
+for insert
+to authenticated
+with check (bucket_id = 'place-photos');
