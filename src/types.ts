@@ -27,6 +27,7 @@ export type PlaceRecord = {
   sourceType: PlaceSourceType
   comment: string
   rating: number
+  favorite: boolean
   tags: string[]
   photoUrls: string[]
   createdAt: string
@@ -35,7 +36,7 @@ export type PlaceRecord = {
 
 export type DraftPlace = Omit<
   PlaceRecord,
-  'id' | 'workspaceId' | 'comment' | 'rating' | 'photoUrls' | 'createdAt' | 'updatedAt'
+  'id' | 'workspaceId' | 'comment' | 'rating' | 'favorite' | 'photoUrls' | 'createdAt' | 'updatedAt'
 >
 
 export type SearchPlace = {
@@ -59,6 +60,7 @@ export type SavePlaceInput = {
   sourceType: PlaceSourceType
   comment: string
   rating: number
+  favorite: boolean
   tags: string[]
   photoUrls: string[]
 }

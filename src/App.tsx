@@ -50,6 +50,7 @@ type FormState = {
   dateVisited: string
   comment: string
   rating: number
+  favorite: boolean
   tags: string[]
   photoUrls: string[]
 }
@@ -65,6 +66,7 @@ type ListFilters = {
   query: string
   category: MarkerIcon | 'all'
   visited: 'all' | 'visited' | 'planned'
+  favorite: boolean
   dateVisited: string
   tag: string
 }
@@ -76,6 +78,7 @@ const EMPTY_FORM: FormState = {
   dateVisited: '',
   comment: '',
   rating: 0,
+  favorite: false,
   tags: [],
   photoUrls: [],
 }
@@ -98,14 +101,14 @@ function formatModeLabel(context: WorkspaceContext | null) {
   return context.mode === 'supabase' ? 'Live shared mode' : 'Demo local mode'
 }
 
-function markerClassName(icon: MarkerIcon, visited: boolean) {
-  return `marker marker--${icon} ${visited ? 'marker--visited' : 'marker--planned'}`
+function markerClassName(icon: MarkerIcon, visited: boolean, favorite: boolean) {
+  return `marker marker--${icon} ${visited ? 'marker--visited' : 'marker--planned'} ${favorite ? 'marker--favorite' : ''}`
 }
 
 function createMarkerElement(place: PlaceRecord) {
   const button = document.createElement('button')
   button.type = 'button'
-  button.className = markerClassName(place.markerIcon, place.visited)
+  button.className = markerClassName(place.markerIcon, place.visited, place.favorite)
   button.setAttribute('aria-label', place.title)
 
   const emblem = document.createElement('span')
@@ -117,6 +120,13 @@ function createMarkerElement(place: PlaceRecord) {
   sticker.className = place.visited ? 'marker__sticker' : 'marker__sticker marker__sticker--planned'
   sticker.textContent = place.visited ? CATEGORY_META[place.markerIcon].sticker : 'Planned'
   button.appendChild(sticker)
+
+  if (place.favorite) {
+    const favorite = document.createElement('span')
+    favorite.className = 'marker__favorite'
+    favorite.textContent = '\u2665'
+    button.appendChild(favorite)
+  }
 
   return button
 }
@@ -133,6 +143,7 @@ function toFormState(place?: DraftPlace | PlaceRecord | null): FormState {
     dateVisited: 'dateVisited' in place && place.dateVisited ? place.dateVisited : '',
     comment: 'comment' in place ? place.comment : '',
     rating: 'rating' in place ? place.rating : 0,
+    favorite: 'favorite' in place ? place.favorite : false,
     tags: 'tags' in place ? place.tags : [],
     photoUrls: 'photoUrls' in place ? place.photoUrls : [],
   }
@@ -163,6 +174,17 @@ function formatDate(date: string | null) {
   })
 }
 
+function formatMonth(date: string | null) {
+  if (!date) {
+    return 'Undated'
+  }
+
+  return new Date(`${date}T00:00:00`).toLocaleDateString('en-SG', {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
 function toErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message
@@ -182,6 +204,7 @@ function App() {
   const [selectedPlace, setSelectedPlace] = useState<DraftPlace | PlaceRecord | null>(null)
   const [formState, setFormState] = useState<FormState>(EMPTY_FORM)
   const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([])
+  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>(STARTER_SEARCH_SUGGESTIONS)
   const [isSearching, setIsSearching] = useState(false)
@@ -189,6 +212,7 @@ function App() {
     query: '',
     category: 'all',
     visited: 'all',
+    favorite: false,
     dateVisited: '',
     tag: '',
   })
@@ -209,6 +233,10 @@ function App() {
       }
 
       if (listFilters.visited === 'planned' && place.visited) {
+        return false
+      }
+
+      if (listFilters.favorite && !place.favorite) {
         return false
       }
 
@@ -236,6 +264,20 @@ function App() {
       .filter((place) => place.visited && place.dateVisited)
       .sort((left, right) => (right.dateVisited ?? '').localeCompare(left.dateVisited ?? ''))
   }, [places])
+
+  const timelineGroups = useMemo(() => {
+    return timelinePlaces.reduce<Array<{ month: string; places: PlaceRecord[] }>>((groups, place) => {
+      const month = formatMonth(place.dateVisited)
+      const group = groups.find((item) => item.month === month)
+      if (group) {
+        group.places.push(place)
+      } else {
+        groups.push({ month, places: [place] })
+      }
+
+      return groups
+    }, [])
+  }, [timelinePlaces])
 
   const totalPhotoCount = formState.photoUrls.length + pendingPhotos.length
 
@@ -583,6 +625,9 @@ function App() {
       }
 
       const photoUrls = [...formState.photoUrls, ...uploadedPhotoUrls]
+      const removedPhotoUrls = isExistingPlace(selectedPlace)
+        ? selectedPlace.photoUrls.filter((url) => !photoUrls.includes(url))
+        : []
       setNotice({
         tone: 'neutral',
         message: uploadedPhotoUrls.length ? 'Saving place with uploaded photos...' : 'Saving place...',
@@ -601,9 +646,21 @@ function App() {
         sourceType,
         comment: formState.comment.trim(),
         rating: formState.rating,
+        favorite: formState.favorite,
         tags: formState.tags,
         photoUrls,
       })
+
+      if (removedPhotoUrls.length) {
+        try {
+          await backend.deletePhotos(removedPhotoUrls)
+        } catch (error) {
+          setNotice({
+            tone: 'neutral',
+            message: `Saved place, but removed photo files could not be cleaned up. ${toErrorMessage(error)}`,
+          })
+        }
+      }
 
       const refreshedPlaces = await backend.listPlaces(workspaceContext.workspace.id)
       const refreshedSaved = refreshedPlaces.find((place) => place.id === saved.id) ?? saved
@@ -671,7 +728,7 @@ function App() {
           <div className="hero-stats" aria-label="Map summary">
             <span>{places.length} places</span>
             <span>{places.filter((place) => place.visited).length} visited</span>
-            <span>{places.reduce((count, place) => count + place.photoUrls.length, 0)} photos</span>
+            <span>{places.filter((place) => place.favorite).length} favorites</span>
           </div>
         </header>
 
@@ -732,6 +789,31 @@ function App() {
 
           {selectedPlace ? (
             <form className="editor-form" onSubmit={handleSubmit}>
+              {isExistingPlace(selectedPlace) ? (
+                <section className="place-summary" aria-label="Selected place summary">
+                  {formState.photoUrls[0] ? (
+                    <button className="place-summary__photo" type="button" onClick={() => setLightboxPhoto(formState.photoUrls[0])}>
+                      <img src={formState.photoUrls[0]} alt={formState.title} />
+                    </button>
+                  ) : (
+                    <div className="place-summary__empty">{CATEGORY_META[formState.category].emoji}</div>
+                  )}
+                  <div className="place-summary__body">
+                    <div className="place-summary__title">
+                      <strong>{formState.title}</strong>
+                      {formState.favorite ? <span className="heart-pill">Hearted</span> : null}
+                    </div>
+                    <div className="pin-card__meta">
+                      <span>{CATEGORY_META[formState.category].label}</span>
+                      <span>{formState.visited ? 'Visited' : 'Planned'}</span>
+                      <span>{formatDate(formState.dateVisited || null)}</span>
+                      <span>{formState.rating > 0 ? `${formState.rating}/5 stars` : 'Unrated'}</span>
+                    </div>
+                    {formState.comment ? <p>{formState.comment}</p> : null}
+                  </div>
+                </section>
+              ) : null}
+
               <label>
                 <span>Place name</span>
                 <input value={formState.title} onChange={(event) => updateForm('title', event.target.value)} required />
@@ -784,6 +866,14 @@ function App() {
                   />
                 </label>
               </div>
+
+              <button
+                type="button"
+                className={formState.favorite ? 'favorite-toggle favorite-toggle--active' : 'favorite-toggle'}
+                onClick={() => updateForm('favorite', !formState.favorite)}
+              >
+                {formState.favorite ? 'Hearted place' : 'Mark as favorite'}
+              </button>
 
               <div className="rating-block">
                 <span className="label label--compact">Rating</span>
@@ -861,7 +951,9 @@ function App() {
                 <div className="photo-grid">
                   {formState.photoUrls.map((url) => (
                     <figure key={url}>
-                      <img src={url} alt={formState.title} />
+                      <button className="photo-preview-button" type="button" onClick={() => setLightboxPhoto(url)}>
+                        <img src={url} alt={formState.title} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => updateForm('photoUrls', formState.photoUrls.filter((photo) => photo !== url))}
@@ -872,7 +964,9 @@ function App() {
                   ))}
                   {pendingPhotos.map((photo) => (
                     <figure key={photo.id} className="photo-grid__pending">
-                      <img src={photo.previewUrl} alt={photo.name} />
+                      <button className="photo-preview-button" type="button" onClick={() => setLightboxPhoto(photo.previewUrl)}>
+                        <img src={photo.previewUrl} alt={photo.name} />
+                      </button>
                       <button type="button" onClick={() => removePendingPhoto(photo.id)}>
                         Remove
                       </button>
@@ -923,32 +1017,6 @@ function App() {
               onChange={(event) => setListFilters((current) => ({ ...current, query: event.target.value }))}
               placeholder="Filter by title, notes, or tags..."
             />
-            <select
-              value={listFilters.category}
-              onChange={(event) =>
-                setListFilters((current) => ({ ...current, category: event.target.value as MarkerIcon | 'all' }))
-              }
-            >
-              <option value="all">All categories</option>
-              {Object.entries(CATEGORY_META).map(([key, value]) => (
-                <option key={key} value={key}>
-                  {value.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={listFilters.visited}
-              onChange={(event) =>
-                setListFilters((current) => ({
-                  ...current,
-                  visited: event.target.value as ListFilters['visited'],
-                }))
-              }
-            >
-              <option value="all">Visited + planned</option>
-              <option value="visited">Visited only</option>
-              <option value="planned">Planned only</option>
-            </select>
             <input
               type="date"
               value={listFilters.dateVisited}
@@ -966,6 +1034,48 @@ function App() {
               ))}
             </select>
           </div>
+          <div className="filter-tabs" aria-label="Visited filter">
+            {[
+              ['all', 'All'],
+              ['visited', 'Visited'],
+              ['planned', 'Planned'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={listFilters.visited === value ? 'filter-tab filter-tab--active' : 'filter-tab'}
+                onClick={() => setListFilters((current) => ({ ...current, visited: value as ListFilters['visited'] }))}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={listFilters.favorite ? 'filter-tab filter-tab--active' : 'filter-tab'}
+              onClick={() => setListFilters((current) => ({ ...current, favorite: !current.favorite }))}
+            >
+              Favorites
+            </button>
+          </div>
+          <div className="category-chip-row" aria-label="Category filters">
+            <button
+              type="button"
+              className={listFilters.category === 'all' ? 'category-chip category-chip--active' : 'category-chip'}
+              onClick={() => setListFilters((current) => ({ ...current, category: 'all' }))}
+            >
+              All
+            </button>
+            {Object.entries(CATEGORY_META).map(([key, value]) => (
+              <button
+                key={key}
+                type="button"
+                className={listFilters.category === key ? 'category-chip category-chip--active' : 'category-chip'}
+                onClick={() => setListFilters((current) => ({ ...current, category: key as MarkerIcon }))}
+              >
+                {value.emoji} {value.label}
+              </button>
+            ))}
+          </div>
         </section>
 
         <section className="timeline-board">
@@ -977,31 +1087,39 @@ function App() {
             <span className="pill">{timelinePlaces.length} visits</span>
           </div>
           <div className="timeline-list">
-            {timelinePlaces.map((place) => (
-              <button
-                key={`timeline-${place.id}`}
-                type="button"
-                className="timeline-card"
-                onClick={() => {
-                  setSelectedPlace(place)
-                  setFormState(toFormState(place))
-                  clearPendingPhotos()
-                }}
-              >
-                {place.photoUrls[0] ? <img className="timeline-card__photo" src={place.photoUrls[0]} alt="" /> : null}
-                <span className="timeline-card__date">{formatDate(place.dateVisited)}</span>
-                <strong>
-                  {CATEGORY_META[place.category].emoji} {place.title}
-                </strong>
-                <p>{place.comment || 'No notes yet.'}</p>
-                <div className="badges-row">
-                  {place.tags.map((tag) => (
-                    <span key={`${place.id}-${tag}`} className="badge-pill">
-                      {tag}
-                    </span>
+            {timelineGroups.map((group) => (
+              <section key={group.month} className="timeline-month">
+                <h3>{group.month}</h3>
+                <div className="timeline-month__places">
+                  {group.places.map((place) => (
+                    <button
+                      key={`timeline-${place.id}`}
+                      type="button"
+                      className="timeline-card"
+                      onClick={() => {
+                        setSelectedPlace(place)
+                        setFormState(toFormState(place))
+                        clearPendingPhotos()
+                      }}
+                    >
+                      {place.photoUrls[0] ? <img className="timeline-card__photo" src={place.photoUrls[0]} alt="" /> : null}
+                      <span className="timeline-card__date">{formatDate(place.dateVisited)}</span>
+                      <strong>
+                        {place.favorite ? 'Hearted ' : ''}
+                        {CATEGORY_META[place.category].emoji} {place.title}
+                      </strong>
+                      <p>{place.comment || 'No notes yet.'}</p>
+                      <div className="badges-row">
+                        {place.tags.map((tag) => (
+                          <span key={`${place.id}-${tag}`} className="badge-pill">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
                   ))}
                 </div>
-              </button>
+              </section>
             ))}
             {!timelinePlaces.length ? (
               <div className="empty-state">
@@ -1039,6 +1157,7 @@ function App() {
                 {place.photoUrls[0] ? <img className="pin-card__photo" src={place.photoUrls[0]} alt="" /> : null}
                 <div className="pin-card__header">
                   <strong>
+                    {place.favorite ? 'Hearted ' : ''}
                     {CATEGORY_META[place.category].emoji} {place.title}
                   </strong>
                   <span className="pill">{CATEGORY_META[place.category].label}</span>
@@ -1071,6 +1190,15 @@ function App() {
           </div>
         </section>
       </main>
+
+      {lightboxPhoto ? (
+        <div className="lightbox" role="dialog" aria-modal="true" onClick={() => setLightboxPhoto(null)}>
+          <button className="lightbox__close" type="button" onClick={() => setLightboxPhoto(null)}>
+            Close
+          </button>
+          <img src={lightboxPhoto} alt="" onClick={(event) => event.stopPropagation()} />
+        </div>
+      ) : null}
     </div>
   )
 }

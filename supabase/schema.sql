@@ -52,6 +52,7 @@ create table if not exists public.entries (
   place_id uuid primary key references public.places(id) on delete cascade,
   comment text not null default '',
   rating integer check (rating between 1 and 5),
+  favorite boolean not null default false,
   tags text[] not null default '{}',
   photo_paths text[] not null default '{}',
   editor_session_id text,
@@ -64,6 +65,9 @@ add column if not exists tags text[] not null default '{}';
 
 alter table public.entries
 add column if not exists photo_paths text[] not null default '{}';
+
+alter table public.entries
+add column if not exists favorite boolean not null default false;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -214,3 +218,10 @@ on storage.objects
 for insert
 to authenticated
 with check (bucket_id = 'place-photos');
+
+drop policy if exists place_photos_authenticated_delete on storage.objects;
+create policy place_photos_authenticated_delete
+on storage.objects
+for delete
+to authenticated
+using (bucket_id = 'place-photos');

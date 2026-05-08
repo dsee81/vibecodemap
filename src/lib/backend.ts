@@ -12,6 +12,7 @@ type Backend = {
   savePlace: (input: SavePlaceInput) => Promise<PlaceRecord>
   deletePlace: (workspaceId: string, placeId: string) => Promise<void>
   uploadPhoto: (workspaceId: string, file: File) => Promise<string>
+  deletePhotos: (urls: string[]) => Promise<void>
   subscribe: (workspaceId: string, onPlaces: (places: PlaceRecord[]) => void) => () => void
 }
 
@@ -34,6 +35,7 @@ type DatabaseEntryRow = {
   place_id: string
   comment: string | null
   rating: number | null
+  favorite?: boolean | null
   tags: string[] | null
   photo_paths: string[] | null
 }
@@ -108,6 +110,10 @@ class LocalBackend implements Backend {
       reader.onerror = () => reject(new Error('Unable to persist the selected image in local mode.'))
       reader.readAsDataURL(file)
     })
+  }
+
+  async deletePhotos() {
+    return
   }
 
   async deletePlace(_workspaceId: string, placeId: string) {
@@ -190,27 +196,20 @@ class SupabaseBackend implements Backend {
   }
 
   async listPlaces(workspaceId: string) {
-    const [{ data: placeRows, error: placeError }, { data: entryRows, error: entryError }] = await Promise.all([
+    const [{ data: placeRows, error: placeError }, entriesResult] = await Promise.all([
       this.client
         .from('places')
         .select('id, workspace_id, title, lat, lng, category, marker_icon, visited, date_visited, source_type, created_at, updated_at')
         .eq('workspace_id', workspaceId)
         .order('updated_at', { ascending: false }),
-      this.client
-        .from('entries')
-        .select('place_id, comment, rating, tags, photo_paths, places!inner(workspace_id)')
-        .eq('places.workspace_id', workspaceId),
+      this.listEntryRows(workspaceId),
     ])
 
     if (placeError) {
       throw new Error(`Failed to load places: ${placeError.message}`)
     }
 
-    if (entryError) {
-      throw new Error(`Failed to load entries: ${entryError.message}`)
-    }
-
-    return mergePlacesAndEntries(placeRows ?? [], entryRows ?? [])
+    return mergePlacesAndEntries(placeRows ?? [], entriesResult)
   }
 
   async savePlace(input: SavePlaceInput) {
@@ -243,21 +242,42 @@ class SupabaseBackend implements Backend {
       throw new Error(`Failed to save the place: ${placeError?.message ?? 'Unknown error'}`)
     }
 
-    const { data: savedEntry, error: entryError } = await this.client
+    let entryResult = await this.client
       .from('entries')
       .upsert(
         {
           place_id: savedPlace.id,
           comment: input.comment,
           rating: input.rating || null,
+          favorite: input.favorite,
           tags: input.tags,
           photo_paths: input.photoUrls,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'place_id' },
       )
-      .select('comment, rating, tags, photo_paths')
+      .select('comment, rating, favorite, tags, photo_paths')
       .single()
+
+    if (entryResult.error && isMissingFavoriteColumn(entryResult.error.message)) {
+      entryResult = await this.client
+        .from('entries')
+        .upsert(
+          {
+            place_id: savedPlace.id,
+            comment: input.comment,
+            rating: input.rating || null,
+            tags: input.tags,
+            photo_paths: input.photoUrls,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'place_id' },
+        )
+        .select('comment, rating, tags, photo_paths')
+        .single()
+    }
+
+    const { data: savedEntry, error: entryError } = entryResult
 
     if (entryError || !savedEntry) {
       throw new Error(`Place saved, but notes failed to update: ${entryError?.message ?? 'Unknown error'}`)
@@ -274,6 +294,7 @@ class SupabaseBackend implements Backend {
       ...mapPlaceRow(savedPlace),
       comment: savedEntry.comment ?? '',
       rating: savedEntry.rating ?? 0,
+      favorite: savedEntry.favorite ?? false,
       tags: savedEntry.tags ?? [],
       photoUrls: savedPhotoUrls,
     }
@@ -293,6 +314,18 @@ class SupabaseBackend implements Backend {
 
     const { data } = this.client.storage.from(STORAGE_BUCKET).getPublicUrl(filename)
     return data.publicUrl
+  }
+
+  async deletePhotos(urls: string[]) {
+    const paths = urls.map(extractStoragePath).filter((path): path is string => Boolean(path))
+    if (!paths.length) {
+      return
+    }
+
+    const { error } = await this.client.storage.from(STORAGE_BUCKET).remove(paths)
+    if (error) {
+      throw new Error(`Photo cleanup failed: ${error.message}`)
+    }
   }
 
   async deletePlace(_workspaceId: string, placeId: string) {
@@ -326,6 +359,32 @@ class SupabaseBackend implements Backend {
       void this.client.removeChannel(channel)
     }
   }
+
+  private async listEntryRows(workspaceId: string) {
+    const result = await this.client
+      .from('entries')
+      .select('place_id, comment, rating, favorite, tags, photo_paths, places!inner(workspace_id)')
+      .eq('places.workspace_id', workspaceId)
+
+    if (!result.error) {
+      return result.data ?? []
+    }
+
+    if (!isMissingFavoriteColumn(result.error.message)) {
+      throw new Error(`Failed to load entries: ${result.error.message}`)
+    }
+
+    const fallback = await this.client
+      .from('entries')
+      .select('place_id, comment, rating, tags, photo_paths, places!inner(workspace_id)')
+      .eq('places.workspace_id', workspaceId)
+
+    if (fallback.error) {
+      throw new Error(`Failed to load entries: ${fallback.error.message}`)
+    }
+
+    return fallback.data ?? []
+  }
 }
 
 function mergePlacesAndEntries(placeRows: DatabasePlaceRow[], entryRows: DatabaseEntryRow[]) {
@@ -337,6 +396,7 @@ function mergePlacesAndEntries(placeRows: DatabasePlaceRow[], entryRows: Databas
       ...mapPlaceRow(row),
       comment: entry?.comment ?? '',
       rating: entry?.rating ?? 0,
+      favorite: entry?.favorite ?? false,
       tags: entry?.tags ?? [],
       photoUrls: entry?.photo_paths ?? [],
     }
@@ -375,6 +435,7 @@ function mapPlaceRow(row: DatabasePlaceRow): PlaceRecord {
     sourceType: row.source_type,
     comment: '',
     rating: 0,
+    favorite: false,
     tags: [],
     photoUrls: [],
     createdAt: row.created_at,
@@ -394,6 +455,7 @@ function normalizeInput(input: SavePlaceInput) {
     sourceType: input.sourceType,
     comment: input.comment,
     rating: input.rating,
+    favorite: input.favorite,
     tags: input.tags,
     photoUrls: input.photoUrls,
   }
@@ -405,4 +467,18 @@ function sortByRecent(left: PlaceRecord, right: PlaceRecord) {
 
 function sanitizeFileName(filename: string) {
   return filename.replace(/[^a-zA-Z0-9._-]+/g, '-')
+}
+
+function extractStoragePath(url: string) {
+  const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`
+  const markerIndex = url.indexOf(marker)
+  if (markerIndex === -1) {
+    return null
+  }
+
+  return decodeURIComponent(url.slice(markerIndex + marker.length).split('?')[0] ?? '')
+}
+
+function isMissingFavoriteColumn(message: string) {
+  return message.toLowerCase().includes('favorite')
 }
