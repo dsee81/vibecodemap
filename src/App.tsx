@@ -32,6 +32,9 @@ const CATEGORY_META: Record<MarkerIcon, { label: string; emoji: string; sticker:
   attraction: { label: 'Attraction', emoji: '\uD83D\uDCCD', sticker: 'Visited' },
   museum: { label: 'Museum', emoji: '\uD83C\uDFDB\uFE0F', sticker: 'Visited' },
   cafe: { label: 'Cafe', emoji: '\u2615', sticker: 'Visited' },
+  hike: { label: 'Hike', emoji: '\uD83E\uDD7E', sticker: 'Visited' },
+  shopping: { label: 'Shopping', emoji: '\uD83D\uDECD\uFE0F', sticker: 'Visited' },
+  movie: { label: 'Movie', emoji: '\uD83C\uDFAC', sticker: 'Visited' },
   custom: { label: 'Custom', emoji: '\u2B50', sticker: 'Visited' },
 }
 
@@ -664,7 +667,7 @@ function App() {
       <aside className="sidebar">
         <header className="hero-panel">
           <p className="eyebrow">Shared map</p>
-          <h1>zhi ning and davin&apos;s food map &lt;3</h1>
+          <h1>zhi ning and davin&apos;s map of wonderful places that we have gone to &lt;3</h1>
           <div className="hero-stats" aria-label="Map summary">
             <span>{places.length} places</span>
             <span>{places.filter((place) => place.visited).length} visited</span>

@@ -21,8 +21,8 @@ create table if not exists public.places (
   title text not null,
   lat double precision not null,
   lng double precision not null,
-  category text not null check (category in ('food', 'attraction', 'museum', 'cafe', 'custom')),
-  marker_icon text not null check (marker_icon in ('food', 'attraction', 'museum', 'cafe', 'custom')),
+  category text not null check (category in ('food', 'attraction', 'museum', 'cafe', 'hike', 'shopping', 'movie', 'custom')),
+  marker_icon text not null check (marker_icon in ('food', 'attraction', 'museum', 'cafe', 'hike', 'shopping', 'movie', 'custom')),
   visited boolean not null default false,
   date_visited date,
   source_type text not null check (source_type in ('search', 'custom')),
@@ -33,6 +33,20 @@ create table if not exists public.places (
 
 alter table public.places
 add column if not exists date_visited date;
+
+alter table public.places
+drop constraint if exists places_category_check;
+
+alter table public.places
+add constraint places_category_check
+check (category in ('food', 'attraction', 'museum', 'cafe', 'hike', 'shopping', 'movie', 'custom'));
+
+alter table public.places
+drop constraint if exists places_marker_icon_check;
+
+alter table public.places
+add constraint places_marker_icon_check
+check (marker_icon in ('food', 'attraction', 'museum', 'cafe', 'hike', 'shopping', 'movie', 'custom'));
 
 create table if not exists public.entries (
   place_id uuid primary key references public.places(id) on delete cascade,

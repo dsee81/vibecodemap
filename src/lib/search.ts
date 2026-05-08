@@ -115,11 +115,23 @@ function inferCategory(text: string): MarkerIcon {
     return 'cafe'
   }
 
+  if (/(hike|trail|nature|reservoir|forest|treetop|macritchie|bukit timah|southern ridges)/.test(value)) {
+    return 'hike'
+  }
+
+  if (/(shopping|shop|mall|retail|boutique|plaza|centre|center)/.test(value)) {
+    return 'shopping'
+  }
+
+  if (/(movie|cinema|theatre|theater|imax|film|golden village|shaw|cathay)/.test(value)) {
+    return 'movie'
+  }
+
   if (/(museum|gallery|library|heritage|temple)/.test(value)) {
     return 'museum'
   }
 
-  if (/(park|garden|zoo|bay|beach|island|reservoir|station|airport|centre|center|mall|harbour)/.test(value)) {
+  if (/(park|garden|zoo|bay|beach|island|station|airport|harbour)/.test(value)) {
     return 'attraction'
   }
 

@@ -1,4 +1,4 @@
-export type MarkerIcon = 'food' | 'attraction' | 'museum' | 'cafe' | 'custom'
+export type MarkerIcon = 'food' | 'attraction' | 'museum' | 'cafe' | 'hike' | 'shopping' | 'movie' | 'custom'
 export type PlaceSourceType = 'search' | 'custom'
 
 export type Workspace = {
