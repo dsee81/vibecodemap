@@ -48,6 +48,9 @@ create table if not exists public.entries (
 alter table public.entries
 add column if not exists tags text[] not null default '{}';
 
+alter table public.entries
+add column if not exists photo_paths text[] not null default '{}';
+
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql

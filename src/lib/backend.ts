@@ -240,25 +240,32 @@ class SupabaseBackend implements Backend {
       throw new Error(`Failed to save the place: ${placeError?.message ?? 'Unknown error'}`)
     }
 
-    const { error: entryError } = await this.client.from('entries').upsert({
-      place_id: savedPlace.id,
-      comment: input.comment,
-      rating: input.rating || null,
-      tags: input.tags,
-      photo_paths: input.photoUrls,
-      updated_at: new Date().toISOString(),
-    })
+    const { data: savedEntry, error: entryError } = await this.client
+      .from('entries')
+      .upsert(
+        {
+          place_id: savedPlace.id,
+          comment: input.comment,
+          rating: input.rating || null,
+          tags: input.tags,
+          photo_paths: input.photoUrls,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'place_id' },
+      )
+      .select('comment, rating, tags, photo_paths')
+      .single()
 
-    if (entryError) {
-      throw new Error(`Place saved, but notes failed to update: ${entryError.message}`)
+    if (entryError || !savedEntry) {
+      throw new Error(`Place saved, but notes failed to update: ${entryError?.message ?? 'Unknown error'}`)
     }
 
     return {
       ...mapPlaceRow(savedPlace),
-      comment: input.comment,
-      rating: input.rating,
-      tags: input.tags,
-      photoUrls: input.photoUrls,
+      comment: savedEntry.comment ?? '',
+      rating: savedEntry.rating ?? 0,
+      tags: savedEntry.tags ?? [],
+      photoUrls: savedEntry.photo_paths ?? [],
     }
   }
 

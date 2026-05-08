@@ -50,6 +50,13 @@ type FormState = {
   photoUrls: string[]
 }
 
+type PendingPhoto = {
+  id: string
+  name: string
+  file: File
+  previewUrl: string
+}
+
 type ListFilters = {
   query: string
   category: MarkerIcon | 'all'
@@ -157,10 +164,12 @@ function App() {
   const mapRef = useRef<MapLibreMap | null>(null)
   const markersRef = useRef<Map<string, Marker>>(new Map())
   const popupRef = useRef<Popup | null>(null)
+  const pendingPhotoPreviewUrlsRef = useRef<Set<string>>(new Set())
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null)
   const [places, setPlaces] = useState<PlaceRecord[]>([])
   const [selectedPlace, setSelectedPlace] = useState<DraftPlace | PlaceRecord | null>(null)
   const [formState, setFormState] = useState<FormState>(EMPTY_FORM)
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([])
   const [search, setSearch] = useState('')
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>(STARTER_SEARCH_SUGGESTIONS)
   const [isSearching, setIsSearching] = useState(false)
@@ -215,6 +224,8 @@ function App() {
       .filter((place) => place.visited && place.dateVisited)
       .sort((left, right) => (right.dateVisited ?? '').localeCompare(left.dateVisited ?? ''))
   }, [places])
+
+  const totalPhotoCount = formState.photoUrls.length + pendingPhotos.length
 
   useEffect(() => {
     const { slug, shareKey, url } = parseWorkspaceFromUrl()
@@ -272,6 +283,15 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const previewUrls = pendingPhotoPreviewUrlsRef.current
+
+    return () => {
+      previewUrls.forEach((url) => URL.revokeObjectURL(url))
+      previewUrls.clear()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!mapHostRef.current || mapRef.current) {
       return
     }
@@ -301,6 +321,7 @@ function App() {
 
       setSelectedPlace(draft)
       setFormState(toFormState(draft))
+      clearPendingPhotos()
     })
 
     mapRef.current = map
@@ -329,6 +350,7 @@ function App() {
         event?.stopPropagation()
         setSelectedPlace(place)
         setFormState(toFormState(place))
+        clearPendingPhotos()
         map.flyTo({ center: [place.lng, place.lat], zoom: Math.max(map.getZoom(), 13.5) })
       }
 
@@ -389,6 +411,28 @@ function App() {
     setFormState((current) => ({ ...current, [key]: value }))
   }
 
+  function clearPendingPhotos() {
+    setPendingPhotos((current) => {
+      current.forEach((photo) => {
+        URL.revokeObjectURL(photo.previewUrl)
+        pendingPhotoPreviewUrlsRef.current.delete(photo.previewUrl)
+      })
+      return []
+    })
+  }
+
+  function removePendingPhoto(id: string) {
+    setPendingPhotos((current) => {
+      const removed = current.find((photo) => photo.id === id)
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl)
+        pendingPhotoPreviewUrlsRef.current.delete(removed.previewUrl)
+      }
+
+      return current.filter((photo) => photo.id !== id)
+    })
+  }
+
   function toggleTag(tag: string) {
     setFormState((current) => ({
       ...current,
@@ -407,6 +451,7 @@ function App() {
     if (savedPlace) {
       setSelectedPlace(savedPlace)
       setFormState(toFormState(savedPlace))
+      clearPendingPhotos()
       return
     }
 
@@ -424,6 +469,7 @@ function App() {
 
     setSelectedPlace(draft)
     setFormState(toFormState(draft))
+    clearPendingPhotos()
   }
 
   async function handleSearchSubmit(event: FormEvent) {
@@ -451,30 +497,37 @@ function App() {
   }
 
   async function handlePhotoSelection(event: ChangeEvent<HTMLInputElement>) {
-    if (!workspaceContext || !event.target.files?.length) {
+    if (!event.target.files?.length) {
       return
     }
 
-    const availableSlots = MAX_PHOTOS - formState.photoUrls.length
+    const availableSlots = MAX_PHOTOS - totalPhotoCount
     const files = Array.from(event.target.files).slice(0, availableSlots)
     if (!files.length) {
+      event.target.value = ''
       return
     }
 
     setIsSaving(true)
 
     try {
-      const uploadedUrls: string[] = []
+      const nextPhotos: PendingPhoto[] = []
       for (const file of files) {
         const compressed = await compressImage(file)
-        const url = await backend.uploadPhoto(workspaceContext.workspace.id, compressed)
-        uploadedUrls.push(url)
+        const previewUrl = URL.createObjectURL(compressed)
+        pendingPhotoPreviewUrlsRef.current.add(previewUrl)
+        nextPhotos.push({
+          id: crypto.randomUUID(),
+          name: compressed.name,
+          file: compressed,
+          previewUrl,
+        })
       }
 
-      updateForm('photoUrls', [...formState.photoUrls, ...uploadedUrls])
+      setPendingPhotos((current) => [...current, ...nextPhotos])
       setNotice({
-        tone: 'success',
-        message: `Uploaded ${uploadedUrls.length} photo${uploadedUrls.length === 1 ? '' : 's'}.`,
+        tone: 'neutral',
+        message: `Ready to save ${nextPhotos.length} photo${nextPhotos.length === 1 ? '' : 's'} with this place.`,
       })
     } catch (error) {
       setNotice({
@@ -498,6 +551,10 @@ function App() {
 
     try {
       const sourceType: PlaceSourceType = selectedPlace.sourceType
+      const uploadedPhotoUrls = pendingPhotos.length
+        ? await Promise.all(pendingPhotos.map((photo) => backend.uploadPhoto(workspaceContext.workspace.id, photo.file)))
+        : []
+      const photoUrls = [...formState.photoUrls, ...uploadedPhotoUrls]
       const saved = await backend.savePlace({
         workspaceId: workspaceContext.workspace.id,
         placeId: isExistingPlace(selectedPlace) ? selectedPlace.id : undefined,
@@ -512,7 +569,7 @@ function App() {
         comment: formState.comment.trim(),
         rating: formState.rating,
         tags: formState.tags,
-        photoUrls: formState.photoUrls,
+        photoUrls,
       })
 
       setPlaces((current) => {
@@ -525,9 +582,14 @@ function App() {
       })
       setSelectedPlace(saved)
       setFormState(toFormState(saved))
+      clearPendingPhotos()
       setNotice({
         tone: 'success',
-        message: `Saved ${saved.title}.`,
+        message: `Saved ${saved.title}${
+          uploadedPhotoUrls.length
+            ? ` with ${uploadedPhotoUrls.length} photo${uploadedPhotoUrls.length === 1 ? '' : 's'}`
+            : ''
+        }.`,
       })
     } catch (error) {
       setNotice({
@@ -551,6 +613,7 @@ function App() {
       setPlaces((current) => current.filter((place) => place.id !== selectedPlace.id))
       setSelectedPlace(null)
       setFormState(EMPTY_FORM)
+      clearPendingPhotos()
       popupRef.current?.remove()
       setNotice({
         tone: 'success',
@@ -576,6 +639,11 @@ function App() {
         <header className="hero-panel">
           <p className="eyebrow">Shared map</p>
           <h1>zhi ning and davin&apos;s food map &lt;3</h1>
+          <div className="hero-stats" aria-label="Map summary">
+            <span>{places.length} places</span>
+            <span>{places.filter((place) => place.visited).length} visited</span>
+            <span>{places.reduce((count, place) => count + place.photoUrls.length, 0)} photos</span>
+          </div>
         </header>
 
         <section className="status-card">
@@ -740,10 +808,10 @@ function App() {
                 <div className="panel-heading">
                   <div>
                     <p className="label">Photos</p>
-                    <h2>Compressed before upload</h2>
+                    <h2>Saved with the place</h2>
                   </div>
                   <span className="pill">
-                    {formState.photoUrls.length}/{MAX_PHOTOS}
+                    {totalPhotoCount}/{MAX_PHOTOS}
                   </span>
                 </div>
                 <label className="upload-button">
@@ -753,9 +821,14 @@ function App() {
                     accept="image/*"
                     multiple
                     onChange={handlePhotoSelection}
-                    disabled={isSaving || formState.photoUrls.length >= MAX_PHOTOS}
+                    disabled={isSaving || totalPhotoCount >= MAX_PHOTOS}
                   />
                 </label>
+                {pendingPhotos.length ? (
+                  <p className="photo-save-note">
+                    {pendingPhotos.length} new photo{pendingPhotos.length === 1 ? '' : 's'} will upload when you save.
+                  </p>
+                ) : null}
                 <div className="photo-grid">
                   {formState.photoUrls.map((url) => (
                     <figure key={url}>
@@ -764,6 +837,14 @@ function App() {
                         type="button"
                         onClick={() => updateForm('photoUrls', formState.photoUrls.filter((photo) => photo !== url))}
                       >
+                        Remove
+                      </button>
+                    </figure>
+                  ))}
+                  {pendingPhotos.map((photo) => (
+                    <figure key={photo.id} className="photo-grid__pending">
+                      <img src={photo.previewUrl} alt={photo.name} />
+                      <button type="button" onClick={() => removePendingPhoto(photo.id)}>
                         Remove
                       </button>
                     </figure>
@@ -875,8 +956,10 @@ function App() {
                 onClick={() => {
                   setSelectedPlace(place)
                   setFormState(toFormState(place))
+                  clearPendingPhotos()
                 }}
               >
+                {place.photoUrls[0] ? <img className="timeline-card__photo" src={place.photoUrls[0]} alt="" /> : null}
                 <span className="timeline-card__date">{formatDate(place.dateVisited)}</span>
                 <strong>
                   {CATEGORY_META[place.category].emoji} {place.title}
@@ -921,8 +1004,10 @@ function App() {
                 onClick={() => {
                   setSelectedPlace(place)
                   setFormState(toFormState(place))
+                  clearPendingPhotos()
                 }}
               >
+                {place.photoUrls[0] ? <img className="pin-card__photo" src={place.photoUrls[0]} alt="" /> : null}
                 <div className="pin-card__header">
                   <strong>
                     {CATEGORY_META[place.category].emoji} {place.title}
@@ -934,6 +1019,11 @@ function App() {
                   <span>{place.visited ? 'Visited' : 'Planned'}</span>
                   <span>{formatDate(place.dateVisited)}</span>
                   <span>{place.rating > 0 ? `${place.rating}/5 stars` : 'Unrated'}</span>
+                  {place.photoUrls.length ? (
+                    <span>
+                      {place.photoUrls.length} photo{place.photoUrls.length === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="badges-row">
                   {place.tags.map((tag) => (
