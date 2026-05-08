@@ -16,14 +16,15 @@ const DEFAULT_LOCAL_KEY = 'local-share'
 const MAX_PHOTOS = 4
 const STAR_GLYPH = '\u2605'
 const TAG_OPTIONS = [
-  'Must go back',
+  'MUST GO BACK!!!',
   'Worth queueing',
-  'Date night',
   'Late-night',
-  'Hidden gem',
+  'hIdDeN gEm?!1',
   'Brunch',
-  'Family-friendly',
-  'Tourist stop',
+  'Lunch',
+  'Dinner',
+  'Brekkie',
+  'Good date spot!',
 ]
 
 const CATEGORY_META: Record<MarkerIcon, { label: string; emoji: string; sticker: string }> = {
